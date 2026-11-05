@@ -307,5 +307,5 @@ jobs:
           MARKET_BASE_URL: ${{ vars.MARKET_BASE_URL }}
           MARKET_ADMIN_TOKEN: ${{ vars.MARKET_ADMIN_TOKEN }}
           MARKET_PLATFORM: ${{ env.MARKET_PLATFORM }}
-          MARKET_DEFAULT_CATEGORY_ID: ${{ vars.MARKET_DEFAULT_CATEGORY_ID || '0' }}
+          MARKET_DEFAULT_CATEGORY_ID: ${{ vars.MARKET_DEFAULT_CATEGORY_ID || '8' }}
           RELEASE_DIR: release

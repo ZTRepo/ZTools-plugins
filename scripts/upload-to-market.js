@@ -324,7 +324,7 @@ function main() {
   const token = process.env.MARKET_ADMIN_TOKEN;
   const platform = process.env.MARKET_PLATFORM || DEFAULT_PLATFORM;
   const releaseDir = process.env.RELEASE_DIR || DEFAULT_RELEASE_DIR;
-  const defaultCategoryId = Number(process.env.MARKET_DEFAULT_CATEGORY_ID || 0);
+  const defaultCategoryId = Number(process.env.MARKET_DEFAULT_CATEGORY_ID || 8);
 
   uploadMarketPlugins({
     baseUrl,
