@@ -20,7 +20,7 @@ on:
         description: "构建完成后自动上传到自建市场（需配置 MARKET_BASE_URL / MARKET_ADMIN_TOKEN Secrets）"
         required: false
         type: boolean
-        default: false
+        default: true
 
 jobs:
   detect:

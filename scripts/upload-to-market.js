@@ -12,6 +12,7 @@ import unzipper from "unzipper";
 const DEFAULT_BASE_URL = "http://ijoy.store";
 const DEFAULT_PLATFORM = "win32";
 const DEFAULT_RELEASE_DIR = "release";
+const CATEGORIES_MAPPING_FILE = "categories-mapping.json";
 
 /**
  * 比较两个语义化版本号
@@ -130,6 +131,47 @@ async function uploadLogo({ baseUrl, token, dir, plugin }) {
 }
 
 /**
+ * 加载 categories-mapping.json，构建「插件名 → catKey 列表」兜底映射
+ * @param {string} releaseDir 产物目录（映射文件位于仓库根，向上回溯查找）
+ * @returns {Map<string, string[]>} 插件名 → catKey 列表
+ */
+function loadCategoryFallback() {
+  const map = new Map();
+  const file = resolve(process.cwd(), CATEGORIES_MAPPING_FILE);
+  if (!existsSync(file)) return map;
+  let mapping;
+  try {
+    mapping = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return map;
+  }
+  for (const cat of mapping || []) {
+    for (const name of cat.list || []) {
+      if (!map.has(name)) map.set(name, []);
+      map.get(name).push(cat.key);
+    }
+  }
+  return map;
+}
+
+/**
+ * 解析插件最终用于匹配市场的 catKey 列表：
+ * 优先用 plugin.json 显式声明的 categories，否则按插件名回退 categories-mapping.json
+ * @param {object} plugin plugin.json 解析结果
+ * @param {Map<string, string[]>} fallback 名字兜底映射
+ * @returns {string[]} catKey 列表
+ */
+function resolvePluginCategories(plugin, fallback) {
+  const explicit = Array.isArray(plugin.categories)
+    ? plugin.categories
+    : plugin.categories
+      ? [plugin.categories]
+      : [];
+  if (explicit.length > 0) return explicit;
+  return fallback.get(plugin.name) || [];
+}
+
+/**
  * 按 catKey 匹配市场分类 ID；匹配不到回退默认 ID，仍无默认则抛错
  * @param {Array<{id:number, catKey:string}>} categories 市场分类列表
  * @param {string[]} pluginCategories 插件分类 catKey 列表
@@ -180,7 +222,7 @@ function buildForm(plugin, categoryId, logoUrl, platform) {
  * @returns {Promise<{id: number, action: 'created'|'updated'|'skipped'}>} 处理结果
  */
 async function uploadOne(ctx, entry) {
-  const { baseUrl, token, platform, defaultCategoryId, categories } = ctx;
+  const { baseUrl, token, platform, defaultCategoryId, categories, categoryFallback } = ctx;
   const { plugin, dir, zipBuffer, zipFile, releaseDir } = entry;
 
   // 查找市场上同名插件，精确匹配 name
@@ -200,7 +242,7 @@ async function uploadOne(ctx, entry) {
 
   const categoryId = matchCategoryId(
     categories,
-    plugin.categories,
+    resolvePluginCategories(plugin, categoryFallback),
     defaultCategoryId,
   );
   const logoUrl = await uploadLogo({ baseUrl, token, dir, plugin });
@@ -300,7 +342,15 @@ export async function uploadMarketPlugins({
   // 拉取市场分类（每个插件的 catKey 映射都依赖它）
   const categories =
     (await api(baseUrl, token, "GET", "/api/v1/market/categories")) || [];
-  const ctx = { baseUrl, token, platform, defaultCategoryId, categories };
+  const categoryFallback = loadCategoryFallback();
+  const ctx = {
+    baseUrl,
+    token,
+    platform,
+    defaultCategoryId,
+    categories,
+    categoryFallback,
+  };
 
   const entries = await collectHighestPerPlugin(releaseDir);
   const results = [];
