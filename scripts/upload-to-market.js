@@ -131,6 +131,18 @@ async function uploadLogo({ baseUrl, token, dir, plugin }) {
 }
 
 /**
+ * 判断错误是否为「该版本已存在」（市场上传接口的幂等判重）
+ * @param {Error} error api() 抛出的错误
+ * @returns {boolean}
+ */
+function isVersionAlreadyExistsError(error) {
+  return (
+    error instanceof Error &&
+    error.message.includes("该版本已存在")
+  );
+}
+
+/**
  * 加载 categories-mapping.json，构建「插件名 → catKey 列表」兜底映射
  * @param {string} releaseDir 产物目录（映射文件位于仓库根，向上回溯查找）
  * @returns {Map<string, string[]>} 插件名 → catKey 列表
@@ -281,9 +293,18 @@ async function uploadOne(ctx, entry) {
   uploadForm.append("file", new Blob([zipBuffer]), zipFile);
   uploadForm.append("version", plugin.version);
   uploadForm.append("releaseNotes", releaseNotes);
-  await api(baseUrl, token, "POST", `/api/v1/market/plugins/${id}/upload`, {
-    form: uploadForm,
-  });
+  try {
+    await api(baseUrl, token, "POST", `/api/v1/market/plugins/${id}/upload`, {
+      form: uploadForm,
+    });
+  } catch (error) {
+    // 市场侧判重：该版本号已有记录。预检查（existing.version）与上传判重口径
+    // 可能不一致，这里兜底视为 skip，避免中断整批。
+    if (isVersionAlreadyExistsError(error)) {
+      return { id, action: "skipped" };
+    }
+    throw error;
+  }
 
   return { id, action };
 }
@@ -354,11 +375,28 @@ export async function uploadMarketPlugins({
 
   const entries = await collectHighestPerPlugin(releaseDir);
   const results = [];
+  const failures = [];
   for (const [name, entry] of entries) {
-    const { id, action } = await uploadOne(ctx, entry);
-    results.push({ name, id, action });
-    console.log(
-      `[market] ${name}@${entry.plugin.version} -> ${action} (id=${id})`,
+    try {
+      const { id, action } = await uploadOne(ctx, entry);
+      results.push({ name, id, action });
+      console.log(
+        `[market] ${name}@${entry.plugin.version} -> ${action} (id=${id})`,
+      );
+    } catch (error) {
+      // 单个插件失败不中断整批，最后汇总并整体报错
+      failures.push({ name, error });
+      console.error(
+        `[market] ${name}@${entry.plugin.version} -> 失败: ${error.message}`,
+      );
+    }
+  }
+  if (failures.length > 0) {
+    const detail = failures
+      .map((f) => `  - ${f.name}: ${f.error.message}`)
+      .join("\n");
+    throw new Error(
+      `${failures.length}/${entries.size} 个插件上传失败:\n${detail}`,
     );
   }
   return results;
