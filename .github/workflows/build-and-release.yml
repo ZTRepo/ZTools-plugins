@@ -3,7 +3,7 @@ name: Build and Release Plugins
 on:
   push:
     branches:
-      - main
+      - dev
   workflow_dispatch:
     inputs:
       operation:
@@ -24,6 +24,11 @@ on:
         required: false
         type: boolean
         default: false
+      upload_to_market:
+        description: '构建完成后自动上传到自建市场（需配置 MARKET_BASE_URL / MARKET_ADMIN_TOKEN Secrets）'
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   detect:
@@ -255,13 +260,64 @@ jobs:
             --notes-file release/release-body.md \
             --latest
 
-      - name: Trigger EdgeOne build hook
-        run: |
-          if [ -z "${EDGEONE_BUILD_URL}" ]; then
-            echo "EDGEONE_BUILD_URL is not set"
-            exit 1
-          fi
+      # - name: Trigger EdgeOne build hook
+      #   run: |
+      #     if [ -z "${EDGEONE_BUILD_URL}" ]; then
+      #       echo "EDGEONE_BUILD_URL is not set"
+      #       exit 1
+      #     fi
 
-          curl -fsS -X POST "${EDGEONE_BUILD_URL}"
+      #     curl -fsS -X POST "${EDGEONE_BUILD_URL}"
+      #   env:
+      #     EDGEONE_BUILD_URL: ${{ secrets.EDGEONE_BUILD_URL || vars.EDGEONE_BUILD_URL }}
+
+  upload-market:
+    needs: release
+    if: |
+      (github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.upload_to_market == 'true')
+    runs-on: ubuntu-latest
+    env:
+      MARKET_PLATFORM: ${{ vars.MARKET_PLATFORM || 'win32' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Map platform to build artifact name
+        id: map
+        run: |
+          case "$MARKET_PLATFORM" in
+            win32)  echo "artifact=release-windows-plugin-packages" ;;
+            darwin) echo "artifact=release-macos-plugin-packages" ;;
+            linux)  echo "artifact=release-linux-plugin-packages" ;;
+            *)      echo "Unsupported MARKET_PLATFORM: $MARKET_PLATFORM"; exit 1 ;;
+          esac
+          echo "name=${artifact}" >> "$GITHUB_OUTPUT"
+
+      - name: Download built plugin packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ steps.map.outputs.artifact }}
+          path: release
+          merge-multiple: true
+          if-no-files-found: warn
+
+      - name: Upload plugins to market
+        run: node scripts/upload-to-market.js
         env:
-          EDGEONE_BUILD_URL: ${{ secrets.EDGEONE_BUILD_URL || vars.EDGEONE_BUILD_URL }}
+          MARKET_BASE_URL: ${{ vars.MARKET_BASE_URL }}
+          MARKET_ADMIN_TOKEN: ${{ vars.MARKET_ADMIN_TOKEN }}
+          MARKET_PLATFORM: ${{ env.MARKET_PLATFORM }}
+          MARKET_DEFAULT_CATEGORY_ID: ${{ vars.MARKET_DEFAULT_CATEGORY_ID || '8' }}
+          RELEASE_DIR: release
